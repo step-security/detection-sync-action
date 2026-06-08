@@ -22,7 +22,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Dry-run on pull request
         if: github.event_name == 'pull_request'
@@ -36,7 +36,7 @@ jobs:
 
       - name: Apply detections on merge
         if: github.event_name == 'push'
-        uses: step-security/detection-sync-action@v1
+        uses: step-security/detection-sync-action@v2
         with:
           token: ${{ secrets.RUNREVEAL_TOKEN }}
           workspace: ${{ vars.RUNREVEAL_WORKSPACE }}
