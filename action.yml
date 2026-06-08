@@ -89,8 +89,7 @@ runs:
       shell: bash
       if: ${{ runner.debug == '1' }}
       run: |
-        echo "Action: detection-sync-action@${{ github.action_ref }}"
-        echo "CLI: $(./runreveal --version)"
+        echo "Version of runreveal installed: $(./runreveal --version)"
 
     - name: Apply detection rules to workspace
       shell: bash
