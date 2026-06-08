@@ -1,0 +1,127 @@
+name: 'RunReveal Detection Sync'
+description: 'Synchronizes local detection rule files with a RunReveal workspace using the RunReveal CLI.'
+inputs:
+  token:
+    description: 'API token for authenticating with RunReveal. Must have permission to manage detections.'
+    required: true
+  workspace:
+    description: 'Unique identifier of the RunReveal workspace that will receive the detection updates.'
+    required: true
+  directory:
+    description: 'Path to the local directory containing detection files to synchronize.'
+    required: true
+    default: './'
+  dry-run:
+    description: 'When set to true, validates detections without applying changes. Useful for PR checks.'
+    required: false
+    default: 'false'
+  github-token:
+    description: 'Token used to post PR comments when a dry-run validation fails. Defaults to the workflow token.'
+    required: false
+    default: ${{ github.token }}
+runs:
+  using: "composite"
+  steps:
+    - name: Subscription check
+      env:
+        REPO_PRIVATE: ${{ github.event.repository.private }}
+      run: |
+        # validate subscription status
+        UPSTREAM="runreveal/detection-sync-action"
+        ACTION_REPO="${GITHUB_ACTION_REPOSITORY:-}"
+        DOCS_URL="https://docs.stepsecurity.io/actions/stepsecurity-maintained-actions"
+
+        echo ""
+        echo -e "\033[1;36mStepSecurity Maintained Action\033[0m"
+        echo "Secure drop-in replacement for $UPSTREAM"
+        if [ "$REPO_PRIVATE" = "false" ]; then
+          echo -e "\033[32m✓ Free for public repositories\033[0m"
+        fi
+        echo -e "\033[36mLearn more:\033[0m $DOCS_URL"
+        echo ""
+
+        if [ "$REPO_PRIVATE" != "false" ]; then
+          SERVER_URL="${GITHUB_SERVER_URL:-https://github.com}"
+
+          if [ "$SERVER_URL" != "https://github.com" ]; then
+            BODY=$(printf '{"action":"%s","ghes_server":"%s"}' "$ACTION_REPO" "$SERVER_URL")
+          else
+            BODY=$(printf '{"action":"%s"}' "$ACTION_REPO")
+          fi
+
+          API_URL="https://agent.api.stepsecurity.io/v1/github/$GITHUB_REPOSITORY/actions/maintained-actions-subscription"
+
+          RESPONSE=$(curl --max-time 3 -s -w "%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -d "$BODY" \
+            "$API_URL" -o /dev/null) && CURL_EXIT_CODE=0 || CURL_EXIT_CODE=$?
+
+          if [ $CURL_EXIT_CODE -ne 0 ]; then
+            echo "Timeout or API not reachable. Continuing to next step."
+          elif [ "$RESPONSE" = "403" ]; then
+            echo -e "::error::\033[1;31mThis action requires a StepSecurity subscription for private repositories.\033[0m"
+            echo -e "::error::\033[31mLearn how to enable a subscription: $DOCS_URL\033[0m"
+            exit 1
+          fi
+        fi
+      shell: bash
+
+    - name: Install RunReveal CLI
+      shell: bash
+      id: install-runreveal-cli
+      run: |
+        set -eo pipefail
+        ARCHIVE="runreveal-linux-amd64.tar.gz"
+        curl -fL "https://github.com/runreveal/homebrew-runreveal/releases/latest/download/${ARCHIVE}" > "${ARCHIVE}"
+        tar -xvf "${ARCHIVE}"
+        chmod +x runreveal
+        rm "${ARCHIVE}"
+
+    - name: Display CLI version info
+      shell: bash
+      if: ${{ runner.debug == '1' }}
+      run: |
+        echo "Action: detection-sync-action@${{ github.action_ref }}"
+        echo "CLI: $(./runreveal --version)"
+
+    - name: Apply detection rules to workspace
+      shell: bash
+      if: ${{ inputs.dry-run == 'false' }}
+      run: |
+        set -eo pipefail
+        ./runreveal detections sync -d $DETECTIONS_PATH
+      env:
+        RUNREVEAL_TOKEN: ${{ inputs.token }}
+        RUNREVEAL_WORKSPACE: ${{ inputs.workspace }}
+        DETECTIONS_PATH: ${{ inputs.directory }}
+
+    - name: Validate detection rules without applying changes
+      shell: bash
+      id: dry-run-sync
+      if: ${{ inputs.dry-run == 'true' }}
+      run: |
+        set -eo pipefail
+        ./runreveal detections sync --dry-run -d $DETECTIONS_PATH 2>&1 | tee /tmp/dry-run-output.log
+      env:
+        DETECTIONS_PATH: ${{ inputs.directory }}
+        RUNREVEAL_TOKEN: ${{ inputs.token }}
+        RUNREVEAL_WORKSPACE: ${{ inputs.workspace }}
+
+    - name: Post validation failure summary to pull request
+      shell: bash
+      if: ${{ failure() && steps.dry-run-sync.outcome == 'failure' && github.event_name == 'pull_request' }}
+      run: |
+        set -eo pipefail
+        LOG_CONTENT=$(cat /tmp/dry-run-output.log)
+        COMMENT_BODY=$(printf '**Detection sync dry-run failed**\n\n```\n%s\n```' "$LOG_CONTENT")
+        gh pr comment "$PULL_REQUEST_NUM" --body "$COMMENT_BODY"
+      env:
+        PULL_REQUEST_NUM: ${{ github.event.pull_request.number }}
+        GH_TOKEN: ${{ inputs.github-token }}
+
+    - name: Remove downloaded CLI binary
+      shell: bash
+      if: always()
+      run: rm -f runreveal
+
