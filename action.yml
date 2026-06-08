@@ -73,10 +73,17 @@ runs:
       run: |
         set -eo pipefail
         ARCHIVE="runreveal-linux-amd64.tar.gz"
-        curl -fL "https://github.com/runreveal/homebrew-runreveal/releases/latest/download/${ARCHIVE}" > "${ARCHIVE}"
+        BASE_URL="https://github.com/runreveal/homebrew-runreveal/releases/latest/download"
+        curl -fL "${BASE_URL}/checksums.txt" > checksums.txt
+        curl -fL "${BASE_URL}/${ARCHIVE}" > "${ARCHIVE}"
+        if ! grep "${ARCHIVE}" checksums.txt | sha256sum -c; then
+          echo "::error::Checksum verification failed for ${ARCHIVE}. The downloaded binary may be corrupted or tampered with."
+          exit 1
+        fi
+        echo -e "\033[32mChecksum verification passed for ${ARCHIVE}\033[0m"
         tar -xvf "${ARCHIVE}"
         chmod +x runreveal
-        rm "${ARCHIVE}"
+        rm "${ARCHIVE}" checksums.txt
 
     - name: Display CLI version info
       shell: bash
@@ -90,7 +97,7 @@ runs:
       if: ${{ inputs.dry-run == 'false' }}
       run: |
         set -eo pipefail
-        ./runreveal detections sync -d $DETECTIONS_PATH
+        ./runreveal detections sync -d "$DETECTIONS_PATH"
       env:
         RUNREVEAL_TOKEN: ${{ inputs.token }}
         RUNREVEAL_WORKSPACE: ${{ inputs.workspace }}
@@ -102,7 +109,7 @@ runs:
       if: ${{ inputs.dry-run == 'true' }}
       run: |
         set -eo pipefail
-        ./runreveal detections sync --dry-run -d $DETECTIONS_PATH 2>&1 | tee /tmp/dry-run-output.log
+        ./runreveal detections sync --dry-run -d "$DETECTIONS_PATH" 2>&1 | tee /tmp/dry-run-output.log
       env:
         DETECTIONS_PATH: ${{ inputs.directory }}
         RUNREVEAL_TOKEN: ${{ inputs.token }}
@@ -123,5 +130,5 @@ runs:
     - name: Remove downloaded CLI binary
       shell: bash
       if: always()
-      run: rm -f runreveal
+      run: rm -f runreveal /tmp/dry-run-output.log
 
